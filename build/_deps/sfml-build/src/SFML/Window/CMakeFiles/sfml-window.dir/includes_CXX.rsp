@@ -1,0 +1,1 @@
+-I"C:/ByteVegas/build/_deps/sfml-src/include" -I"C:/ByteVegas/build/_deps/sfml-src/src" -I"C:/ByteVegas/build/_deps/sfml-src/extlibs/headers/vulkan" -isystem "C:/ByteVegas/build/_deps/sfml-src/extlibs/headers/glad/include"

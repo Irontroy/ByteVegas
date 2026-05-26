@@ -1,0 +1,3 @@
+C:/ByteVegas/build/_deps/sfml-subbuild/CMakeFiles/sfml-populate.dir
+C:/ByteVegas/build/_deps/sfml-subbuild/CMakeFiles/edit_cache.dir
+C:/ByteVegas/build/_deps/sfml-subbuild/CMakeFiles/rebuild_cache.dir

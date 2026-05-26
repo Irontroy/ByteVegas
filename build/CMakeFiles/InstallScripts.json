@@ -1,0 +1,14 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/ByteVegas/build/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/System/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/Main/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/Window/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/Network/cmake_install.cmake",
+		"C:/ByteVegas/build/_deps/sfml-build/src/SFML/Graphics/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

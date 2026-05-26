@@ -1,0 +1,6 @@
+{
+  "apiProvider": "openrouter",
+  "openRouterApiKey": "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",
+  "primaryModel": "openrouter/free",
+  "subagentModel": "openrouter/free"
+}

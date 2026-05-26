@@ -1,0 +1,12 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+C:/ByteVegas/build/_deps/sfml-build/src/SFML/System/sfml-system.rc
+winresrc.h
+C:/ByteVegas/build/_deps/sfml-build/src/SFML/System/winresrc.h
+
