@@ -7,7 +7,7 @@ struct BlackjackCard {
     int suit;  // 0=Karo, 1=Kreuz, 2=Herz, 3=Pik
     int value; // 0=Ass, 1=2, ..., 9=10, 10=Bube, 11=Dame, 12=König
 
-    int getScoreValue() const {
+    [[nodiscard]] int getScoreValue() const {
         if (value == 0) return 11;
         if (value >= 10) return 10;
         return value + 1;
@@ -23,13 +23,19 @@ class Game
 {
 public:
     Game();
+    ~Game();
     void run();
 
 private:
     void initWindow();
+    void recreateWindow(bool fullscreen);
     void initFonts();
+    void initAssets();
     void initTexts();
     void initShapes();
+
+    void loadBalance();
+    void saveBalance() const;
 
     void pollEvents();
     void update(float dt);
@@ -73,6 +79,7 @@ private:
     // ── Window & State ─────────────────────────
     sf::RenderWindow window;
     GameState        currentState;
+    bool             isFullscreen{false};
 
     // ── Economy ────────────────────────────────
     int playerBalance;
@@ -86,17 +93,39 @@ private:
     sf::Text textBalance;
     sf::Text textCard1, textCard2, textCard3;
     sf::Text textEscHint;
+    sf::Text textAdminPrompt;
+    sf::Text textAdminInput;
 
     // ── Menu shapes ────────────────────────────
     sf::RectangleShape cardBox1, cardBox2, cardBox3;
     sf::RectangleShape titleDivider;
+    sf::RectangleShape adminOverlayBg;
+    sf::RectangleShape adminInputBox;
 
     // ── Hover-State ────────────────────────────
     bool hoverBox1{false}, hoverBox2{false}, hoverBox3{false};
+    std::string adminCheatBuffer;
+    std::string adminMoneyInput;
+    bool adminCheatInputActive{false};
+
+    // ── Exit Confirmation Dialog ────────────────
+    bool exitConfirmationActive{false};
+    GameState exitConfirmationFromState{GameState::MENU};
+    sf::RectangleShape exitConfirmationBg;
+    sf::RectangleShape exitConfirmationBox;
+    sf::RectangleShape exitConfirmYesButton;
+    sf::RectangleShape exitConfirmNoButton;
+    sf::Text textExitConfirmTitle;
+    sf::Text textExitConfirmYes;
+    sf::Text textExitConfirmNo;
 
     // ── HUD ────────────────────────────────────
     sf::Text           textHUD;
     sf::RectangleShape hudBox;
+
+    // ── Icons / Assets ─────────────────────────
+    sf::Texture menuIconsTexture;   // sprite sheet: 3 icons (Blackjack, Roulette, Slots)
+    sf::Texture slotIconsTexture;   // sprite sheet: 4 symbols (7, BAR, O, X)
 
     // ══════════════════════════════════════════
     //   SLOTS

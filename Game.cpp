@@ -3,10 +3,24 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <fstream>
 #include <random>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <cctype>
+#include <limits>
+
+// ═══════════════════════════════════════════════════════
+//   Screen / Window Constants
+// ═══════════════════════════════════════════════════════
+namespace Screen
+{
+    const float WIDTH = 1920.f;
+    const float HEIGHT = 1080.f;
+}
 
 // ═══════════════════════════════════════════════════════
 //   Farb-Palette
@@ -99,15 +113,15 @@ namespace BjLayout
     const float CONTROLS_Y      = 546.f;
 
     // Gemeinsam
-    // Widerer Bereich für HD: zentriert bei 1280px
+    // Widerer Bereich für HD: zentriert bei Screen::WIDTH
     const float AREA_W          = 900.f;
-    const float AREA_X          = (1280.f - AREA_W) / 2.f;
+    const float AREA_X          = (Screen::WIDTH - AREA_W) / 2.f;
 }
 
 namespace Layout
 {
     const float CAB_W=800.f, CAB_H=230.f;
-    const float CAB_X=(1280.f-CAB_W)/2.f, CAB_Y=170.f;
+    const float CAB_X=(Screen::WIDTH-CAB_W)/2.f, CAB_Y=170.f;
     const float REEL_W=150.f, REEL_H=170.f;
     const float REEL_GAP=16.f;
     const float REEL_Y=CAB_Y+(CAB_H-REEL_H)/2.f;
@@ -130,6 +144,85 @@ namespace RouletteWheel
         24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26
     };
     static constexpr int WHEEL_SIZE = 37;
+}
+
+namespace
+{
+    namespace fs = std::filesystem;
+
+    static const char* kBalanceFileName = "bytevegas_balance.txt";
+
+    static bool loadTextureFromCandidates(sf::Texture& texture, const std::vector<std::string>& candidates)
+    {
+        for (const auto& path : candidates) {
+            if (texture.loadFromFile(path)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static sf::Sprite makeSpriteInBox(const sf::Texture& texture, const sf::IntRect& sourceRect, const sf::FloatRect& box, float margin = 0.14f)
+    {
+        sf::Sprite sprite;
+        sprite.setTexture(texture);
+        sprite.setTextureRect(sourceRect);
+
+        if (sourceRect.width <= 0 || sourceRect.height <= 0) {
+            return sprite;
+        }
+
+        const float maxW = box.width * (1.f - margin * 2.f);
+        const float maxH = box.height * (1.f - margin * 2.f);
+        const float scale = std::min(maxW / static_cast<float>(sourceRect.width), maxH / static_cast<float>(sourceRect.height));
+
+        sprite.setScale(scale, scale);
+        const sf::FloatRect bounds = sprite.getLocalBounds();
+        sprite.setOrigin(bounds.left + bounds.width / 2.f, bounds.top + bounds.height / 2.f);
+        sprite.setPosition(box.left + box.width / 2.f, box.top + box.height / 2.f);
+        return sprite;
+    }
+
+    static int slotSymbolIndex(const std::string& symbol)
+    {
+        if (symbol == "[ 7 ]") return 0;
+        if (symbol == "[BAR]") return 1;
+        if (symbol == "[ O ]") return 2;
+        if (symbol == "[ X ]") return 3;
+        return -1;
+    }
+
+    static fs::path currentBalanceFile()
+    {
+        return fs::path(kBalanceFileName);
+    }
+
+    static fs::path parentBalanceFile()
+    {
+        return fs::path("..") / kBalanceFileName;
+    }
+
+    static fs::path resolveLoadBalanceFile()
+    {
+        const fs::path current = currentBalanceFile();
+        if (fs::exists(current)) return current;
+
+        const fs::path parent = parentBalanceFile();
+        if (fs::exists(parent)) return parent;
+
+        return {};
+    }
+
+    static fs::path resolveSaveBalanceFile()
+    {
+        const fs::path current = currentBalanceFile();
+        if (fs::exists(current)) return current;
+
+        const fs::path parent = parentBalanceFile();
+        if (fs::exists(parent)) return parent;
+
+        return current;
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -161,6 +254,7 @@ Game::Game()
     , playerBalance(1000)
 {
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
+    loadBalance();
 
     symbolWeights.insert(symbolWeights.end(),  2, "[ 7 ]");
     symbolWeights.insert(symbolWeights.end(),  8, "[BAR]");
@@ -169,17 +263,33 @@ Game::Game()
 
     initWindow();
     initFonts();
+    initAssets();
     initShapes();
     initTexts();
 
     slots[0] = slots[1] = slots[2] = "[ ? ]";
+    for(int i=0;i<3;++i) textSlotReel[i].setString(slots[i]);
     initDeck();
+}
+
+Game::~Game()
+{
+    saveBalance();
 }
 
 void Game::initWindow()
 {
-    window.create(sf::VideoMode(1280, 720), "ByteVegas",
-                  sf::Style::Titlebar | sf::Style::Close);
+    recreateWindow(false);
+}
+
+void Game::recreateWindow(bool fullscreen)
+{
+    isFullscreen = fullscreen;
+    const sf::Uint32 style = fullscreen ? sf::Style::Fullscreen
+                                        : (sf::Style::Titlebar | sf::Style::Close);
+    window.create(sf::VideoMode(static_cast<unsigned int>(Screen::WIDTH),
+                                static_cast<unsigned int>(Screen::HEIGHT)),
+                  "ByteVegas", style);
     window.setFramerateLimit(60);
 }
 
@@ -189,11 +299,50 @@ void Game::initFonts()
         std::cerr << "[ERROR] Font nicht geladen\n";
 }
 
+void Game::initAssets()
+{
+    loadTextureFromCandidates(menuIconsTexture, {"menu_icons.png", "../menu_icons.png", "assets/menu_icons.png", "../assets/menu_icons.png"});
+    loadTextureFromCandidates(slotIconsTexture, {"slot_icons.png", "../slot_icons.png", "assets/slot_icons.png", "../assets/slot_icons.png"});
+}
+
+void Game::loadBalance()
+{
+    const auto path = resolveLoadBalanceFile();
+    if (path.empty()) {
+        return;
+    }
+
+    std::ifstream in(path);
+    if (!in) {
+        std::cerr << "[WARN] Konnte Geldstand nicht laden: " << path.string() << '\n';
+        return;
+    }
+
+    int loaded = 0;
+    if (in >> loaded && loaded >= 0) {
+        playerBalance = loaded;
+    } else {
+        std::cerr << "[WARN] Ungueltiger Geldstand in Datei, Standardwert bleibt aktiv.\n";
+    }
+}
+
+void Game::saveBalance() const
+{
+    const auto path = resolveSaveBalanceFile();
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        std::cerr << "[WARN] Konnte Geldstand nicht speichern: " << path.string() << '\n';
+        return;
+    }
+
+    out << playerBalance << '\n';
+}
+
 void Game::initShapes()
 {
     // ── Menu ────────────────────────────────────
-    const float BW=200.f,BH=90.f,BG=40.f,BY=340.f;
-    const float BX0=(1280.f-(3.f*BW+2.f*BG))/2.f;
+    const float BW=360.f,BH=220.f,BG=60.f,BY=300.f;
+    const float BX0=(Screen::WIDTH-(3.f*BW+2.f*BG))/2.f;
     auto mkBox=[&](sf::RectangleShape& b,float x){
         b.setSize({BW,BH}); b.setPosition(x,BY);
         b.setFillColor(Color::CARD_BG);
@@ -202,10 +351,21 @@ void Game::initShapes()
     };
     mkBox(cardBox1,BX0); mkBox(cardBox2,BX0+BW+BG); mkBox(cardBox3,BX0+2.f*(BW+BG));
 
-    titleDivider.setSize({800.f,1.f});
+    titleDivider.setSize({1200.f,1.f});
     titleDivider.setFillColor(Color::GOLD_DIM);
-    titleDivider.setOrigin(400.f,0.f);
-    titleDivider.setPosition(640.f,160.f);
+    titleDivider.setOrigin(600.f,0.f);
+    titleDivider.setPosition(Screen::WIDTH / 2.f,160.f);
+
+    // Hidden admin input overlay (menu only)
+    adminOverlayBg.setSize({Screen::WIDTH, Screen::HEIGHT});
+    adminOverlayBg.setFillColor(sf::Color(0, 0, 0, 165));
+
+    adminInputBox.setSize({620.f, 170.f});
+    adminInputBox.setOrigin(310.f, 85.f);
+    adminInputBox.setPosition(Screen::WIDTH / 2.f, Screen::HEIGHT / 2.f);
+    adminInputBox.setFillColor(sf::Color(25, 25, 35, 235));
+    adminInputBox.setOutlineColor(Color::GOLD_DIM);
+    adminInputBox.setOutlineThickness(2.f);
 
     // ── HUD ─────────────────────────────────────
     hudBox.setSize({210.f,38.f}); hudBox.setPosition(8.f,6.f);
@@ -256,7 +416,7 @@ void Game::initShapes()
     bjBetBox.setSize({BjLayout::AREA_W, BjLayout::BET_BOX_H});
     // ensure the blackjack bet bar is exactly centered at X=640
     bjBetBox.setOrigin(BjLayout::AREA_W / 2.f, 0.f);
-    bjBetBox.setPosition(640.f, BjLayout::BET_BOX_Y);
+    bjBetBox.setPosition(Screen::WIDTH / 2.f, BjLayout::BET_BOX_Y);
     bjBetBox.setFillColor(Color::BJ_BET_BG);
     bjBetBox.setOutlineColor(sf::Color(40,140,70,180));
     bjBetBox.setOutlineThickness(1.f);
@@ -308,7 +468,7 @@ void Game::initShapes()
     const float BBW = 240.f;
     const float BBH = 56.f;
     const float BBG = 22.f;
-    const float BBX0 = (1280.f - (4.f * BBW + 3.f * BBG)) / 2.f;
+    const float BBX0 = (Screen::WIDTH - (4.f * BBW + 3.f * BBG)) / 2.f;
     const float BBY = 560.f;
 
     betRedButton.setSize({BBW, BBH});
@@ -334,6 +494,34 @@ void Game::initShapes()
     betOddButton.setFillColor(Color::CARD_BG);
     betOddButton.setOutlineColor(sf::Color(0,0,0,0));
     betOddButton.setOutlineThickness(0.f);
+
+    // ── Exit Confirmation Dialog ─────────────────
+    exitConfirmationBg.setSize({Screen::WIDTH, Screen::HEIGHT});
+    exitConfirmationBg.setFillColor(sf::Color(0, 0, 0, 180));
+
+    exitConfirmationBox.setSize({500.f, 220.f});
+    exitConfirmationBox.setOrigin(250.f, 110.f);
+    exitConfirmationBox.setPosition(Screen::WIDTH / 2.f, Screen::HEIGHT / 2.f);
+    exitConfirmationBox.setFillColor(sf::Color(25, 25, 35, 235));
+    exitConfirmationBox.setOutlineColor(Color::GOLD_DIM);
+    exitConfirmationBox.setOutlineThickness(2.f);
+
+    const float btnW = 100.f, btnH = 50.f;
+    const float btnGap = 30.f;
+    const float btnBaseX = Screen::WIDTH / 2.f - (btnW * 2 + btnGap) / 2.f;
+    const float btnBaseY = Screen::HEIGHT / 2.f + 40.f;
+
+    exitConfirmYesButton.setSize({btnW, btnH});
+    exitConfirmYesButton.setPosition(btnBaseX, btnBaseY);
+    exitConfirmYesButton.setFillColor(sf::Color(180, 30, 30));
+    exitConfirmYesButton.setOutlineColor(Color::GOLD_DIM);
+    exitConfirmYesButton.setOutlineThickness(1.5f);
+
+    exitConfirmNoButton.setSize({btnW, btnH});
+    exitConfirmNoButton.setPosition(btnBaseX + btnW + btnGap, btnBaseY);
+    exitConfirmNoButton.setFillColor(sf::Color(30, 100, 180));
+    exitConfirmNoButton.setOutlineColor(Color::GOLD_DIM);
+    exitConfirmNoButton.setOutlineThickness(1.5f);
 }
 
 void Game::initTexts()
@@ -342,30 +530,37 @@ void Game::initTexts()
     textTitle.setFont(font); textTitle.setString("Welcome to ByteVegas");
     textTitle.setCharacterSize(50); textTitle.setFillColor(Color::GOLD);
     textTitle.setStyle(sf::Text::Bold);
-    centerTextH(textTitle,1280.f,62.f);
+    centerTextH(textTitle,Screen::WIDTH,62.f);
 
     textSubtitle.setFont(font); textSubtitle.setString("Where Fortunes Are Made");
     textSubtitle.setCharacterSize(17); textSubtitle.setFillColor(Color::MID_GRAY);
     textSubtitle.setStyle(sf::Text::Italic);
-    centerTextH(textSubtitle,1280.f,126.f);
+    centerTextH(textSubtitle,Screen::WIDTH,126.f);
 
     textBalance.setFont(font); textBalance.setCharacterSize(24);
     textBalance.setFillColor(Color::LIGHT_GRAY);
 
-    auto mkCardText=[&](sf::Text& t,const std::string& l1,
-                         const std::string& l2,const sf::RectangleShape& box){
-        t.setFont(font); t.setString(l1+"\n"+l2);
-        t.setCharacterSize(19); t.setFillColor(Color::LIGHT_GRAY);
-        centerTextInBox(t,box);
-    };
-    mkCardText(textCard1,"[ 1 ]","Blackjack",cardBox1);
-    mkCardText(textCard2,"[ 2 ]","Roulette", cardBox2);
-    mkCardText(textCard3,"[ 3 ]","Slots",    cardBox3);
+    // Menu card labels hidden - icons only
+    textCard1.setFont(font); textCard1.setString("");
+    textCard2.setFont(font); textCard2.setString("");
+    textCard3.setFont(font); textCard3.setString("");
 
     textEscHint.setFont(font);
     textEscHint.setString("[ESC] Exit current game  |  [ESC in Menu] Quit");
     textEscHint.setCharacterSize(15); textEscHint.setFillColor(Color::MID_GRAY);
-    centerTextH(textEscHint,1280.f,510.f);
+    centerTextH(textEscHint,Screen::WIDTH,980.f);
+
+    textAdminPrompt.setFont(font);
+    textAdminPrompt.setCharacterSize(24);
+    textAdminPrompt.setFillColor(Color::GOLD_BRIGHT);
+    textAdminPrompt.setString("ADMIN MODE: Kontostand eingeben und [ENTER] bestaetigen");
+    centerTextH(textAdminPrompt, Screen::WIDTH, Screen::HEIGHT / 2.f - 38.f);
+
+    textAdminInput.setFont(font);
+    textAdminInput.setCharacterSize(34);
+    textAdminInput.setFillColor(Color::LIGHT_GRAY);
+    textAdminInput.setString("$");
+    centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
 
     // ── HUD ─────────────────────────────────────
     textHUD.setFont(font); textHUD.setCharacterSize(18);
@@ -376,12 +571,13 @@ void Game::initTexts()
     textSlotTitle.setString("B Y T E V E G A S   S L O T S");
     textSlotTitle.setCharacterSize(22); textSlotTitle.setFillColor(Color::GOLD);
     textSlotTitle.setStyle(sf::Text::Bold);
-    centerTextH(textSlotTitle,1280.f,128.f);
+    centerTextH(textSlotTitle,Screen::WIDTH,128.f);
 
     for(int i=0;i<3;++i){
         textSlotReel[i].setFont(font); textSlotReel[i].setCharacterSize(38);
         textSlotReel[i].setFillColor(Color::GOLD_BRIGHT);
         textSlotReel[i].setStyle(sf::Text::Bold);
+        textSlotReel[i].setString(slots[i]);
     }
     textSlotBet.setFont(font); textSlotBet.setCharacterSize(21);
     textSlotBet.setFillColor(Color::LIGHT_GRAY);
@@ -390,7 +586,7 @@ void Game::initTexts()
     textSlotControls.setFont(font); textSlotControls.setCharacterSize(15);
     textSlotControls.setFillColor(Color::MID_GRAY);
     textSlotControls.setString("[SPACE] Drehen | [UP/DOWN] Einsatz anpassen | [ESC] Menue");
-    centerTextH(textSlotControls,1280.f,680.f);
+    centerTextH(textSlotControls,Screen::WIDTH,680.f);
 
     // ── Blackjack ────────────────────────────────
 
@@ -399,7 +595,7 @@ void Game::initTexts()
     textBjTitle.setString("B L A C K J A C K");
     textBjTitle.setCharacterSize(22); textBjTitle.setFillColor(Color::GOLD);
     textBjTitle.setStyle(sf::Text::Bold);
-    centerTextH(textBjTitle,1280.f,48.f);
+    centerTextH(textBjTitle,Screen::WIDTH,48.f);
 
     // Dealer section
     textBjDealerLabel.setFont(font);
@@ -464,7 +660,7 @@ void Game::initTexts()
     textBjControls.setFillColor(Color::MID_GRAY);
     textBjControls.setString(
         "[SPACE] Neue Runde | [H] Karte ziehen (Hit) | [S] Halten (Stand) | [UP/DOWN] Einsatz anpassen | [ESC] Menue");
-    centerTextH(textBjControls,1280.f,685.f);
+    centerTextH(textBjControls,Screen::WIDTH,685.f);
 
     // ── Roulette ────────────────────────────────
     textRouletteTitle.setFont(font);
@@ -472,7 +668,7 @@ void Game::initTexts()
     textRouletteTitle.setCharacterSize(28);
     textRouletteTitle.setFillColor(Color::GOLD);
     textRouletteTitle.setStyle(sf::Text::Bold);
-    centerTextH(textRouletteTitle, 1280.f, 34.f);
+    centerTextH(textRouletteTitle, Screen::WIDTH, 34.f);
 
     // Bet options
     std::string betLabels[4]={"ROT","SCHWARZ","GERADE","UNGERADE"};
@@ -515,7 +711,26 @@ void Game::initTexts()
     textRouletteControls.setOrigin(
         textRouletteControls.getLocalBounds().left + textRouletteControls.getLocalBounds().width / 2.0f,
         textRouletteControls.getLocalBounds().top + textRouletteControls.getLocalBounds().height / 2.0f);
-    textRouletteControls.setPosition(640.f, 685.f);
+    textRouletteControls.setPosition(Screen::WIDTH / 2.f, 685.f);
+
+    // ── Exit Confirmation Dialog ────────────────
+    textExitConfirmTitle.setFont(font);
+    textExitConfirmTitle.setCharacterSize(24);
+    textExitConfirmTitle.setFillColor(Color::GOLD_BRIGHT);
+    textExitConfirmTitle.setString("Wirklich beenden?");
+    centerTextH(textExitConfirmTitle, Screen::WIDTH, Screen::HEIGHT / 2.f - 50.f);
+
+    textExitConfirmYes.setFont(font);
+    textExitConfirmYes.setCharacterSize(18);
+    textExitConfirmYes.setFillColor(Color::LIGHT_GRAY);
+    textExitConfirmYes.setString("JA");
+    centerTextInBox(textExitConfirmYes, exitConfirmYesButton);
+
+    textExitConfirmNo.setFont(font);
+    textExitConfirmNo.setCharacterSize(18);
+    textExitConfirmNo.setFillColor(Color::LIGHT_GRAY);
+    textExitConfirmNo.setString("NEIN");
+    centerTextInBox(textExitConfirmNo, exitConfirmNoButton);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -524,10 +739,9 @@ void Game::initTexts()
 void Game::initDeck()
 {
     if (cardsTexture.getNativeHandle() == 0) {
-        if (!cardsTexture.loadFromFile("cards.png")) {
-            if (!cardsTexture.loadFromFile("../cards.png")) {
-                std::cerr << "[ERROR] cards.png konnte weder im aktuellen noch im Root-Ordner gefunden werden!\n";
-            }
+        loadTextureFromCandidates(cardsTexture, {"cards.png", "../cards.png", "C:/cards.png", "../../cards.png"});
+        if (cardsTexture.getNativeHandle() == 0) {
+            std::cerr << "[ERROR] cards.png konnte in keinem der gesuchten Verzeichnisse gefunden werden!\n";
         }
     }
 
@@ -565,6 +779,7 @@ void Game::startBlackjackRound()
     if(deck.size() < 10) initDeck();
 
     playerBalance -= blackjackBet;
+    saveBalance();
     playerHand.clear();
     dealerHand.clear();
 
@@ -619,6 +834,7 @@ void Game::playerDoubleDown()
 
     // Deduct the bet again and double it
     playerBalance -= blackjackBet;
+    saveBalance();
     blackjackBet *= 2;
     blackjackDoubledDown = true;
 
@@ -694,13 +910,15 @@ void Game::evaluateRound()
         bjResult    = BjResult::PUSH;
     }
 
+    saveBalance();
+
     textBjResult.setString(resultStr);
     textBjResult.setFillColor(resultColor);
     // place the blackjack result text closer under the bet bar, centered at X=640
     {
         sf::FloatRect rb = textBjResult.getLocalBounds();
         textBjResult.setOrigin(rb.left + rb.width/2.f, rb.top + rb.height/2.f);
-        textBjResult.setPosition(640.f, 565.f);
+        textBjResult.setPosition(Screen::WIDTH / 2.f, 565.f);
     }
 
     // Reset Double Down state
@@ -770,12 +988,13 @@ void Game::spinRoulette()
     if(playerBalance < totalBet){
         textRouletteResult.setString("NOT ENOUGH BALANCE!");
         textRouletteResult.setFillColor(Color::BJ_BUST);
-        centerTextH(textRouletteResult, 1280.f, 300.f);
+        centerTextH(textRouletteResult, Screen::WIDTH, 300.f);
         return;
     }
 
     // Deduct total bet from balance and start spin
     playerBalance -= totalBet;
+    saveBalance();
     winningNumber = generateWinningNumber();
     rouletteSpinning = true;
     rouletteTimer = 0.f;
@@ -897,6 +1116,8 @@ void Game::evaluateRouletteSpin()
         resultColor = Color::BJ_BUST;
     }
 
+    saveBalance();
+
     textRouletteResult.setString(resultStr);
     textRouletteResult.setFillColor(resultColor);
     textRouletteWinningNumber.setString(std::to_string(winningNumber));
@@ -914,10 +1135,12 @@ void Game::startSpin()
 {
     if(playerBalance < currentBet){ slotResultMsg="NOT ENOUGH BALANCE!"; lastWin=0; return; }
     playerBalance -= currentBet;
+    saveBalance();
     slotResultMsg.clear(); lastWin=0; isSpinning=true; winBlinking=false;
     spinElapsed=0.f; flickerAccum=0.f;
     reel1Stopped=reel2Stopped=reel3Stopped=false;
     slots[0]=randomSymbol(); slots[1]=randomSymbol(); slots[2]=randomSymbol();
+    for(int i=0;i<3;++i) textSlotReel[i].setString(slots[i]);
     slotCabinetBox.setOutlineColor(Color::CABINET_BORDER);
 }
 
@@ -973,6 +1196,7 @@ void Game::updateWinBlink(float dt)
 void Game::finalizeSpin()
 {
     isSpinning=false; lastWin=calcSlotWin(); playerBalance+=lastWin;
+    saveBalance();
     if(slots[0]=="[ 7 ]" && slots[1]=="[ 7 ]" && slots[2]=="[ 7 ]")
         slotResultMsg="*** JACKPOT! ***  +" + std::to_string(lastWin) + " $";
     else if(lastWin>0)
@@ -1023,22 +1247,96 @@ void Game::pollEvents()
     while(window.pollEvent(event)){
         if(event.type==sf::Event::Closed){ window.close(); return; }
 
+        if(event.type==sf::Event::TextEntered && currentState==GameState::MENU){
+            if(adminCheatInputActive){
+                const sf::Uint32 ch = event.text.unicode;
+                if(ch >= '0' && ch <= '9'){
+                    if(adminMoneyInput.size() < 12) adminMoneyInput.push_back(static_cast<char>(ch));
+                } else if(ch == 8 && !adminMoneyInput.empty()){
+                    adminMoneyInput.pop_back();
+                }
+
+                textAdminInput.setString("$" + adminMoneyInput);
+                centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                continue;
+            }
+
+            const sf::Uint32 ch = event.text.unicode;
+            if(ch < 128 && std::isalpha(static_cast<unsigned char>(ch))){
+                adminCheatBuffer.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+                if(adminCheatBuffer.size() > 5) adminCheatBuffer.erase(0, adminCheatBuffer.size() - 5);
+                if(adminCheatBuffer == "ADMIN"){
+                    adminCheatInputActive = true;
+                    adminMoneyInput.clear();
+                    textAdminInput.setString("$");
+                    centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    adminCheatBuffer.clear();
+                }
+            }
+        }
+
         if(event.type==sf::Event::KeyPressed){
+            if(event.key.code == sf::Keyboard::F11){
+                recreateWindow(!isFullscreen);
+                return;
+            }
+
+            // Handle exit confirmation dialog
+            if(exitConfirmationActive){
+                if(event.key.code == sf::Keyboard::Escape){
+                    // ESC: cancel exit
+                    exitConfirmationActive = false;
+                    continue;
+                }
+                // ESC dialog overrides other key handling
+                continue;
+            }
+
+            if(currentState==GameState::MENU && adminCheatInputActive){
+                if(event.key.code == sf::Keyboard::Escape){
+                    adminCheatInputActive = false;
+                    adminMoneyInput.clear();
+                    textAdminInput.setString("$");
+                    centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    continue;
+                }
+                if(event.key.code == sf::Keyboard::Enter || event.key.code == sf::Keyboard::Return){
+                    if(!adminMoneyInput.empty()){
+                        long long newBalance = std::stoll(adminMoneyInput);
+                        long long maxBalance = std::numeric_limits<int>::max();
+                        if(newBalance > maxBalance) newBalance = maxBalance;
+                        if(newBalance >= 0){
+                            playerBalance = static_cast<int>(newBalance);
+                            saveBalance();
+                        }
+                    }
+                    adminCheatInputActive = false;
+                    adminMoneyInput.clear();
+                    textAdminInput.setString("$");
+                    centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    continue;
+                }
+                // While admin input is open, swallow all other key presses
+                // so menu hotkeys (1/2/3) are not triggered.
+                continue;
+            }
+
             switch(currentState){
 
             case GameState::MENU:
                 if     (event.key.code==sf::Keyboard::Num1)   currentState=GameState::BLACKJACK;
                 else if(event.key.code==sf::Keyboard::Num2)   currentState=GameState::ROULETTE;
                 else if(event.key.code==sf::Keyboard::Num3)   currentState=GameState::SLOTS;
-                else if(event.key.code==sf::Keyboard::Escape) window.close();
+                else if(event.key.code==sf::Keyboard::Escape){
+                    exitConfirmationActive = true;
+                    exitConfirmationFromState = GameState::MENU;
+                }
                 break;
 
             case GameState::ROULETTE:
                 if(event.key.code==sf::Keyboard::Escape){
-                    currentState=GameState::MENU;
-                    rouletteSpinning=false;
-                    textRouletteResult.setString("");
-                    textRouletteWinningNumber.setString("");
+                    exitConfirmationActive = true;
+                    exitConfirmationFromState = GameState::ROULETTE;
                 }
                 else if(event.key.code==sf::Keyboard::Space && !rouletteSpinning){
                     spinRoulette();
@@ -1057,12 +1355,8 @@ void Game::pollEvents()
 
             case GameState::SLOTS:
                 if(event.key.code==sf::Keyboard::Escape){
-                    currentState=GameState::MENU; isSpinning=false; winBlinking=false;
-                    slotResultMsg.clear();
-                    slotCabinetBox.setOutlineColor(Color::CABINET_BORDER);
-                    slotCabinetBox.setOutlineThickness(5.f);
-                    slotPayline.setFillColor(Color::PAYLINE_COLOR);
-                    for(int i=0;i<3;++i) slotReelBox[i].setFillColor(Color::REEL_BG);
+                    exitConfirmationActive = true;
+                    exitConfirmationFromState = GameState::SLOTS;
                 }
                 else if(event.key.code==sf::Keyboard::Space && !isSpinning) startSpin();
                 else if(!isSpinning){
@@ -1076,10 +1370,8 @@ void Game::pollEvents()
 
             case GameState::BLACKJACK:
                 if(event.key.code==sf::Keyboard::Escape){
-                    currentState=GameState::MENU;
-                    blackjackGameActive=false;
-                    bjResult=BjResult::NONE;
-                    textBjResult.setString("");
+                    exitConfirmationActive = true;
+                    exitConfirmationFromState = GameState::BLACKJACK;
                 }
                 else if(event.key.code==sf::Keyboard::Space && !blackjackGameActive)
                     startBlackjackRound();
@@ -1101,11 +1393,45 @@ void Game::pollEvents()
         }
 
         if(event.type==sf::Event::MouseButtonPressed &&
-           event.mouseButton.button==sf::Mouse::Left &&
-           currentState==GameState::MENU){
-            if     (cardBox1.getGlobalBounds().contains(mpF)) currentState=GameState::BLACKJACK;
-            else if(cardBox2.getGlobalBounds().contains(mpF)) currentState=GameState::ROULETTE;
-            else if(cardBox3.getGlobalBounds().contains(mpF)) currentState=GameState::SLOTS;
+           event.mouseButton.button==sf::Mouse::Left){
+            if(exitConfirmationActive){
+                if(exitConfirmYesButton.getGlobalBounds().contains(mpF)){
+                    // User confirmed exit
+                    if(exitConfirmationFromState == GameState::MENU){
+                        window.close();
+                    } else {
+                        currentState = GameState::MENU;
+                        // Reset game state when exiting
+                        if(exitConfirmationFromState == GameState::ROULETTE){
+                            rouletteSpinning = false;
+                            textRouletteResult.setString("");
+                            textRouletteWinningNumber.setString("");
+                        } else if(exitConfirmationFromState == GameState::SLOTS){
+                            isSpinning = false;
+                            winBlinking = false;
+                            slotResultMsg.clear();
+                            slotCabinetBox.setOutlineColor(Color::CABINET_BORDER);
+                            slotCabinetBox.setOutlineThickness(5.f);
+                            slotPayline.setFillColor(Color::PAYLINE_COLOR);
+                            for(int i=0;i<3;++i) slotReelBox[i].setFillColor(Color::REEL_BG);
+                        } else if(exitConfirmationFromState == GameState::BLACKJACK){
+                            blackjackGameActive = false;
+                            bjResult = BjResult::NONE;
+                            textBjResult.setString("");
+                        }
+                    }
+                    exitConfirmationActive = false;
+                }
+                else if(exitConfirmNoButton.getGlobalBounds().contains(mpF)){
+                    // User cancelled exit
+                    exitConfirmationActive = false;
+                }
+            }
+            else if(currentState==GameState::MENU && !adminCheatInputActive){
+                if     (cardBox1.getGlobalBounds().contains(mpF)) currentState=GameState::BLACKJACK;
+                else if(cardBox2.getGlobalBounds().contains(mpF)) currentState=GameState::ROULETTE;
+                else if(cardBox3.getGlobalBounds().contains(mpF)) currentState=GameState::SLOTS;
+            }
         }
 
         if(event.type==sf::Event::MouseButtonPressed &&
@@ -1184,7 +1510,7 @@ void Game::update(float dt)
 {
     // HUD & Balance (always)
     textBalance.setString("Your Balance:  $" + std::to_string(playerBalance));
-    centerTextH(textBalance,1280.f,218.f);
+    centerTextH(textBalance,Screen::WIDTH,218.f);
     if(currentState == GameState::ROULETTE){
         textHUD.setString("$  " + std::to_string(playerBalance) + "   Chip: $" + std::to_string(rouletteChip));
     } else {
@@ -1195,12 +1521,6 @@ void Game::update(float dt)
     applyHoverStyle(cardBox1,hoverBox1);
     applyHoverStyle(cardBox2,hoverBox2);
     applyHoverStyle(cardBox3,hoverBox3);
-    centerTextInBox(textCard1,cardBox1);
-    centerTextInBox(textCard2,cardBox2);
-    centerTextInBox(textCard3,cardBox3);
-    textCard1.setFillColor(hoverBox1?Color::GOLD_BRIGHT:Color::LIGHT_GRAY);
-    textCard2.setFillColor(hoverBox2?Color::GOLD_BRIGHT:Color::LIGHT_GRAY);
-    textCard3.setFillColor(hoverBox3?Color::GOLD_BRIGHT:Color::LIGHT_GRAY);
 
     // ── Slots ────────────────────────────────────
     if(currentState==GameState::SLOTS){
@@ -1213,12 +1533,12 @@ void Game::update(float dt)
         // give the slot bet box a consistent width (same as cabinet) and center it
         slotBetBox.setSize({ Layout::CAB_W, 38.f });
         slotBetBox.setOrigin(Layout::CAB_W / 2.f, 0.f);
-        slotBetBox.setPosition(640.f, 414.f);
+        slotBetBox.setPosition(Screen::WIDTH / 2.f, 414.f);
         // center the text exactly in the middle of the bet box
         {
             sf::FloatRect b = textSlotBet.getLocalBounds();
             textSlotBet.setOrigin(b.left + b.width / 2.0f, b.top + b.height / 2.0f);
-            textSlotBet.setPosition(640.f, slotBetBox.getPosition().y + slotBetBox.getGlobalBounds().height / 2.0f);
+            textSlotBet.setPosition(Screen::WIDTH / 2.f, slotBetBox.getPosition().y + slotBetBox.getGlobalBounds().height / 2.0f);
         }
         if(!slotResultMsg.empty()){
             bool isJack=(slotResultMsg.find("JACKPOT")!=std::string::npos);
@@ -1229,10 +1549,10 @@ void Game::update(float dt)
                 isJack?Color::JACKPOT_TEXT:isWin?Color::WIN_TEXT:Color::LOSE_TEXT);
             // place result text directly under the slot bet box, centered at X=640
             {
-                float resultY = slotBetBox.getPosition().y + slotBetBox.getGlobalBounds().height + 14.f;
+                float resultY = slotBetBox.getPosition().y + slotBetBox.getGlobalBounds().height + 38.f;
                 sf::FloatRect rb = textSlotResult.getLocalBounds();
                 textSlotResult.setOrigin(rb.left + rb.width/2.f, rb.top + rb.height/2.f);
-                textSlotResult.setPosition(640.f, resultY);
+                textSlotResult.setPosition(Screen::WIDTH / 2.f, resultY);
             }
         }
         textSlotControls.setFillColor(isSpinning?sf::Color(70,70,90):Color::MID_GRAY);
@@ -1248,7 +1568,7 @@ void Game::update(float dt)
         {
             sf::FloatRect b = textBjBet.getLocalBounds();
             textBjBet.setOrigin(b.left + b.width / 2.0f, b.top + b.height / 2.0f);
-            textBjBet.setPosition(640.f, bjBetBox.getPosition().y + bjBetBox.getGlobalBounds().height / 2.0f);
+            textBjBet.setPosition(Screen::WIDTH / 2.f, bjBetBox.getPosition().y + bjBetBox.getGlobalBounds().height / 2.0f);
         }
 
         if(!blackjackGameActive && bjResult==BjResult::NONE){
@@ -1337,10 +1657,40 @@ void Game::renderMenu()
     window.clear(Color::BG_MENU);
     window.draw(textTitle); window.draw(textSubtitle);
     window.draw(titleDivider); window.draw(textBalance);
-    window.draw(cardBox1); window.draw(textCard1);
-    window.draw(cardBox2); window.draw(textCard2);
-    window.draw(cardBox3); window.draw(textCard3);
+
+    auto drawMenuIcon=[&](const sf::RectangleShape& box, const sf::IntRect& src){
+        window.draw(box);
+        if(menuIconsTexture.getNativeHandle() == 0) return;
+        const sf::Vector2f pos = box.getPosition();
+        const sf::Vector2f size = box.getSize();
+        const sf::FloatRect iconArea(pos.x + 10.f, pos.y + 10.f, size.x - 20.f, size.y - 20.f);
+        auto icon = makeSpriteInBox(menuIconsTexture, src, iconArea, 0.01f);
+        window.draw(icon);
+    };
+
+    drawMenuIcon(cardBox1, sf::IntRect(0, 0, 96, 96));
+    drawMenuIcon(cardBox2, sf::IntRect(96, 0, 96, 96));
+    drawMenuIcon(cardBox3, sf::IntRect(192, 0, 96, 96));
+
     window.draw(textEscHint);
+
+    if(adminCheatInputActive){
+        window.draw(adminOverlayBg);
+        window.draw(adminInputBox);
+        window.draw(textAdminPrompt);
+        window.draw(textAdminInput);
+    }
+
+    // Draw exit confirmation dialog if active
+    if(exitConfirmationActive){
+        window.draw(exitConfirmationBg);
+        window.draw(exitConfirmationBox);
+        window.draw(textExitConfirmTitle);
+        window.draw(exitConfirmYesButton);
+        window.draw(exitConfirmNoButton);
+        window.draw(textExitConfirmYes);
+        window.draw(textExitConfirmNo);
+    }
 }
 
 void Game::renderGame()
@@ -1355,11 +1705,34 @@ void Game::renderSlots()
     window.draw(hudBox); window.draw(textHUD);
     window.draw(textSlotTitle);
     window.draw(slotCabinetBox);
-    for(int i=0;i<3;++i){ window.draw(slotReelBox[i]); window.draw(textSlotReel[i]); }
+    for(int i=0;i<3;++i){
+        window.draw(slotReelBox[i]);
+        std::string symbol = textSlotReel[i].getString().toAnsiString();
+        int idx = slotSymbolIndex(symbol);
+        if(idx >= 0 && slotIconsTexture.getNativeHandle() != 0){
+            sf::FloatRect iconArea(slotReelBox[i].getPosition().x + 14.f, slotReelBox[i].getPosition().y + 18.f,
+                                   slotReelBox[i].getSize().x - 28.f, slotReelBox[i].getSize().y - 36.f);
+            auto icon = makeSpriteInBox(slotIconsTexture, sf::IntRect(idx * 96, 0, 96, 96), iconArea, 0.08f);
+            window.draw(icon);
+        } else {
+            window.draw(textSlotReel[i]);
+        }
+    }
     window.draw(slotPayline);
     window.draw(slotBetBox); window.draw(textSlotBet);
     if(!slotResultMsg.empty() && !isSpinning) window.draw(textSlotResult);
     window.draw(textSlotControls);
+
+    // Draw exit confirmation dialog if active
+    if(exitConfirmationActive){
+        window.draw(exitConfirmationBg);
+        window.draw(exitConfirmationBox);
+        window.draw(textExitConfirmTitle);
+        window.draw(exitConfirmYesButton);
+        window.draw(exitConfirmNoButton);
+        window.draw(textExitConfirmYes);
+        window.draw(textExitConfirmNo);
+    }
 }
 
 void Game::renderBlackjack()
@@ -1456,6 +1829,17 @@ void Game::renderBlackjack()
 
     // Controls clearly below everything
     window.draw(textBjControls);
+
+    // Draw exit confirmation dialog if active
+    if(exitConfirmationActive){
+        window.draw(exitConfirmationBg);
+        window.draw(exitConfirmationBox);
+        window.draw(textExitConfirmTitle);
+        window.draw(exitConfirmYesButton);
+        window.draw(exitConfirmNoButton);
+        window.draw(textExitConfirmYes);
+        window.draw(textExitConfirmNo);
+    }
 }
 
 void Game::renderRoulette()
@@ -1542,15 +1926,23 @@ void Game::renderRoulette()
 
     // Result display: centered in the free space between the number grid and the buttons
     if(!rouletteSpinning && winningNumber >= 0){
-        const float resultX = 780.f;
+        const float resultX = Screen::WIDTH * 0.61f;
         const float numberY = 440.f;
         const float resultY = 490.f;
 
-        sf::Color winningColor = (winningNumber == 0 ? sf::Color(180, 220, 180) : sf::Color::White);
+        const sf::Color winningColor = getRouletteNumberColor(winningNumber);
         sf::FloatRect wnb = textRouletteWinningNumber.getLocalBounds();
         textRouletteWinningNumber.setOrigin(wnb.left + wnb.width / 2.0f, wnb.top + wnb.height / 2.0f);
         textRouletteWinningNumber.setPosition(resultX, numberY);
         textRouletteWinningNumber.setFillColor(winningColor);
+        // Black numbers need a light outline to stay visible on dark background.
+        if(winningNumber != 0 && !isRedNumber(winningNumber)){
+            textRouletteWinningNumber.setOutlineColor(sf::Color(220,220,220));
+            textRouletteWinningNumber.setOutlineThickness(1.5f);
+        } else {
+            textRouletteWinningNumber.setOutlineColor(sf::Color::Transparent);
+            textRouletteWinningNumber.setOutlineThickness(0.f);
+        }
         window.draw(textRouletteWinningNumber);
 
         sf::FloatRect rb = textRouletteResult.getLocalBounds();
@@ -1595,8 +1987,19 @@ void Game::renderRoulette()
     if(betAmountRed > 0){ sb.setString("$" + std::to_string(betAmountRed)); centerTextInBox(sb, betRedButton); sb.move(0.f, -20.f); window.draw(sb); }
     if(betAmountBlack > 0){ sb.setString("$" + std::to_string(betAmountBlack)); centerTextInBox(sb, betBlackButton); sb.move(0.f, -20.f); window.draw(sb); }
     if(betAmountEven > 0){ sb.setString("$" + std::to_string(betAmountEven)); centerTextInBox(sb, betEvenButton); sb.move(0.f, -20.f); window.draw(sb); }
-    if(betAmountOdd > 0){ sb.setString("$" + std::to_string(betAmountOdd)); centerTextInBox(sb, betOddButton); sb.move(0.f, -20.f); window.draw(sb); }
+     if(betAmountOdd > 0){ sb.setString("$" + std::to_string(betAmountOdd)); centerTextInBox(sb, betOddButton); sb.move(0.f, -20.f); window.draw(sb); }
 
     // Controls
     window.draw(textRouletteControls);
+
+    // Draw exit confirmation dialog if active
+    if(exitConfirmationActive){
+        window.draw(exitConfirmationBg);
+        window.draw(exitConfirmationBox);
+        window.draw(textExitConfirmTitle);
+        window.draw(exitConfirmYesButton);
+        window.draw(exitConfirmNoButton);
+        window.draw(textExitConfirmYes);
+        window.draw(textExitConfirmNo);
+    }
 }
