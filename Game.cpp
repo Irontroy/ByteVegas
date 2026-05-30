@@ -152,6 +152,13 @@ namespace
 
     static const char* kBalanceFileName = "bytevegas_balance.txt";
 
+    namespace SlotEconomy
+    {
+        static constexpr std::array<int, 4> weights { 2, 6, 12, 20 };
+        static constexpr std::array<int, 4> triplePayouts { 30, 12, 5, 3 };
+        static constexpr std::array<int, 4> pairPayouts { 6, 3, 1, 0 };
+    }
+
     static bool loadTextureFromCandidates(sf::Texture& texture, const std::vector<std::string>& candidates)
     {
         for (const auto& path : candidates) {
@@ -223,6 +230,81 @@ namespace
 
         return current;
     }
+
+    static bool loadSoundBufferFromCandidates(sf::SoundBuffer& buffer, const std::vector<std::string>& candidates)
+    {
+        for (const auto& path : candidates) {
+            if (buffer.loadFromFile(path)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static sf::SoundBuffer makeToneBuffer(float startFreq, float endFreq, float duration, float amplitude)
+    {
+        constexpr unsigned sampleRate = 44100;
+        const std::size_t sampleCount = std::max<std::size_t>(1u, static_cast<std::size_t>(duration * sampleRate));
+        std::vector<sf::Int16> samples(sampleCount);
+        constexpr float pi = 3.14159265359f;
+
+        for (std::size_t i = 0; i < sampleCount; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(sampleRate);
+            const float progress = sampleCount > 1 ? static_cast<float>(i) / static_cast<float>(sampleCount - 1) : 0.f;
+            const float phase = 2.f * pi * (startFreq * t + ((endFreq - startFreq) * t * t) / (2.f * duration));
+            float sample = std::sin(phase);
+
+            const float attack = std::min(1.f, t / 0.01f);
+            const float release = std::min(1.f, (duration - t) / 0.04f);
+            const float envelope = std::clamp(std::min(attack, release), 0.f, 1.f);
+            (void)progress;
+            sample *= amplitude * envelope;
+
+            samples[i] = static_cast<sf::Int16>(std::clamp(sample, -1.f, 1.f) * 32767.f);
+        }
+
+        sf::SoundBuffer buffer;
+        buffer.loadFromSamples(samples.data(), samples.size(), 1, sampleRate);
+        return buffer;
+    }
+
+    static sf::SoundBuffer makeClickBuffer()
+    {
+        return makeToneBuffer(1400.f, 900.f, 0.06f, 0.38f);
+    }
+
+    static sf::SoundBuffer makeSpinBuffer()
+    {
+        // Casino spin sound: upward whooshing tone with good resonance
+        return makeToneBuffer(200.f, 850.f, 0.28f, 0.32f);
+    }
+
+    static sf::SoundBuffer makeWinBuffer()
+    {
+        // Casino 7-up sound: ascending arpeggio with celebratory peak
+        // Starts mid-range, sweeps up sharply to high peak, then settles
+        return makeToneBuffer(660.f, 1320.f, 0.6f, 0.40f);
+    }
+
+    static sf::SoundBuffer makeLoseBuffer()
+    {
+        // Casino lose sound: descending "sad trombone" style
+        return makeToneBuffer(262.f, 130.f, 0.40f, 0.35f);
+    }
+
+    static sf::SoundBuffer makeAlertBuffer()
+    {
+        return makeToneBuffer(880.f, 660.f, 0.12f, 0.30f);
+    }
+
+        static std::string formatAutoDelay(float seconds)
+        {
+            float clamped = std::max(0.f, seconds);
+            std::string text = std::to_string(std::round(clamped * 10.f) / 10.f);
+            while(!text.empty() && text.back() == '0') text.pop_back();
+            if(!text.empty() && text.back() == '.') text.pop_back();
+            return text.empty() ? std::string("0") : text;
+        }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -256,14 +338,15 @@ Game::Game()
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
     loadBalance();
 
-    symbolWeights.insert(symbolWeights.end(),  2, "[ 7 ]");
-    symbolWeights.insert(symbolWeights.end(),  8, "[BAR]");
-    symbolWeights.insert(symbolWeights.end(), 14, "[ O ]");
-    symbolWeights.insert(symbolWeights.end(), 16, "[ X ]");
+    symbolWeights.insert(symbolWeights.end(), SlotEconomy::weights[0], "[ 7 ]");
+    symbolWeights.insert(symbolWeights.end(), SlotEconomy::weights[1], "[BAR]");
+    symbolWeights.insert(symbolWeights.end(), SlotEconomy::weights[2], "[ O ]");
+    symbolWeights.insert(symbolWeights.end(), SlotEconomy::weights[3], "[ X ]");
 
     initWindow();
     initFonts();
     initAssets();
+    initSounds();
     initShapes();
     initTexts();
 
@@ -305,6 +388,45 @@ void Game::initAssets()
     loadTextureFromCandidates(slotIconsTexture, {"slot_icons.png", "../slot_icons.png", "assets/slot_icons.png", "../assets/slot_icons.png"});
 }
 
+void Game::initSounds()
+{
+    auto loadOrGenerate = [](sf::SoundBuffer& buffer,
+                             const std::vector<std::string>& candidates,
+                             const sf::SoundBuffer& fallback) {
+        if (!loadSoundBufferFromCandidates(buffer, candidates)) {
+            buffer = fallback;
+        }
+    };
+
+    loadOrGenerate(soundClickBuffer,
+                   {"assets/sounds/click.wav", "../assets/sounds/click.wav", "click.wav", "../click.wav"},
+                   makeClickBuffer());
+    loadOrGenerate(soundSpinBuffer,
+                   {"assets/sounds/spin.wav", "../assets/sounds/spin.wav", "spin.wav", "../spin.wav"},
+                   makeSpinBuffer());
+    loadOrGenerate(soundWinBuffer,
+                   {"assets/sounds/win.wav", "../assets/sounds/win.wav", "win.wav", "../win.wav"},
+                   makeWinBuffer());
+    loadOrGenerate(soundLoseBuffer,
+                   {"assets/sounds/lose.wav", "../assets/sounds/lose.wav", "lose.wav", "../lose.wav"},
+                   makeLoseBuffer());
+    loadOrGenerate(soundAlertBuffer,
+                   {"assets/sounds/alert.wav", "../assets/sounds/alert.wav", "alert.wav", "../alert.wav"},
+                   makeAlertBuffer());
+
+    clickSound.setBuffer(soundClickBuffer);
+    spinSound.setBuffer(soundSpinBuffer);
+    winSound.setBuffer(soundWinBuffer);
+    loseSound.setBuffer(soundLoseBuffer);
+    alertSound.setBuffer(soundAlertBuffer);
+
+    clickSound.setVolume(55.f);
+    spinSound.setVolume(45.f);
+    winSound.setVolume(70.f);
+    loseSound.setVolume(60.f);
+    alertSound.setVolume(65.f);
+}
+
 void Game::loadBalance()
 {
     const auto path = resolveLoadBalanceFile();
@@ -338,6 +460,16 @@ void Game::saveBalance() const
     out << playerBalance << '\n';
 }
 
+void Game::playSound(sf::Sound& sound)
+{
+    if (sound.getBuffer() == nullptr) {
+        return;
+    }
+
+    sound.stop();
+    sound.play();
+}
+
 void Game::initShapes()
 {
     // ── Menu ────────────────────────────────────
@@ -366,6 +498,17 @@ void Game::initShapes()
     adminInputBox.setFillColor(sf::Color(25, 25, 35, 235));
     adminInputBox.setOutlineColor(Color::GOLD_DIM);
     adminInputBox.setOutlineThickness(2.f);
+
+    // Bet input overlay (can be opened in-game to type arbitrary bet amounts)
+    betOverlayBg.setSize({Screen::WIDTH, Screen::HEIGHT});
+    betOverlayBg.setFillColor(sf::Color(0, 0, 0, 150));
+
+    betInputBox.setSize({620.f, 170.f});
+    betInputBox.setOrigin(310.f, 85.f);
+    betInputBox.setPosition(Screen::WIDTH / 2.f, Screen::HEIGHT / 2.f);
+    betInputBox.setFillColor(sf::Color(25, 25, 35, 235));
+    betInputBox.setOutlineColor(Color::GOLD_DIM);
+    betInputBox.setOutlineThickness(2.f);
 
     // ── HUD ─────────────────────────────────────
     hudBox.setSize({210.f,38.f}); hudBox.setPosition(8.f,6.f);
@@ -562,6 +705,19 @@ void Game::initTexts()
     textAdminInput.setString("$");
     centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
 
+    // Bet input texts (for arbitrary bet entry during a game)
+    textBetPrompt.setFont(font);
+    textBetPrompt.setCharacterSize(24);
+    textBetPrompt.setFillColor(Color::GOLD_BRIGHT);
+    textBetPrompt.setString("Einsatz eingeben und [ENTER] bestaetigen");
+    centerTextH(textBetPrompt, Screen::WIDTH, Screen::HEIGHT / 2.f - 38.f);
+
+    textBetInput.setFont(font);
+    textBetInput.setCharacterSize(34);
+    textBetInput.setFillColor(Color::LIGHT_GRAY);
+    textBetInput.setString("$");
+    centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+
     // ── HUD ─────────────────────────────────────
     textHUD.setFont(font); textHUD.setCharacterSize(18);
     textHUD.setFillColor(Color::GOLD); textHUD.setPosition(18.f,13.f);
@@ -585,7 +741,7 @@ void Game::initTexts()
     textSlotResult.setStyle(sf::Text::Bold); textSlotResult.setString("");
     textSlotControls.setFont(font); textSlotControls.setCharacterSize(15);
     textSlotControls.setFillColor(Color::MID_GRAY);
-    textSlotControls.setString("[SPACE] Drehen | [UP/DOWN] Einsatz anpassen | [ESC] Menue");
+    textSlotControls.setString("[SPACE] Drehen | [UP/DOWN] Einsatz anpassen | [B] Einsatz eingeben | [A] AutoSpin | [X] StopAuto | [ESC] Menue");
     centerTextH(textSlotControls,Screen::WIDTH,680.f);
 
     // ── Blackjack ────────────────────────────────
@@ -659,7 +815,7 @@ void Game::initTexts()
     textBjControls.setCharacterSize(18);
     textBjControls.setFillColor(Color::MID_GRAY);
     textBjControls.setString(
-        "[SPACE] Neue Runde | [H] Karte ziehen (Hit) | [S] Halten (Stand) | [UP/DOWN] Einsatz anpassen | [ESC] Menue");
+        "[SPACE] Neue Runde | [H] Karte ziehen (Hit) | [S] Halten (Stand) | [UP/DOWN] Einsatz anpassen | [B] Einsatz eingeben | [ESC] Menue");
     centerTextH(textBjControls,Screen::WIDTH,685.f);
 
     // ── Roulette ────────────────────────────────
@@ -707,7 +863,7 @@ void Game::initTexts()
     textRouletteControls.setCharacterSize(18);
     textRouletteControls.setFillColor(Color::MID_GRAY);
     textRouletteControls.setString(
-        "[CLICK] Zahl oder Sonderfeld auswaehlen | [SPACE] Rad drehen | [RECHTSKLICK] Einsatz entfernen | [ESC] Menue");
+        "[CLICK] Zahl oder Sonderfeld auswaehlen | [SPACE] Rad drehen | [RECHTSKLICK] Einsatz entfernen | [B] Einsatz eingeben | [ESC] Menue");
     textRouletteControls.setOrigin(
         textRouletteControls.getLocalBounds().left + textRouletteControls.getLocalBounds().width / 2.0f,
         textRouletteControls.getLocalBounds().top + textRouletteControls.getLocalBounds().height / 2.0f);
@@ -777,6 +933,8 @@ void Game::startBlackjackRound()
         return;
     }
     if(deck.size() < 10) initDeck();
+
+    playSound(spinSound);
 
     playerBalance -= blackjackBet;
     saveBalance();
@@ -911,6 +1069,13 @@ void Game::evaluateRound()
     }
 
     saveBalance();
+    if (bjResult == BjResult::PLAYER_WIN) {
+        playSound(winSound);
+    } else if (bjResult == BjResult::PUSH) {
+        playSound(alertSound);
+    } else {
+        playSound(loseSound);
+    }
 
     textBjResult.setString(resultStr);
     textBjResult.setFillColor(resultColor);
@@ -1107,13 +1272,16 @@ void Game::evaluateRouletteSpin()
     if(winningNumber == 0){
         resultStr = "0 - HAUS GEWINNT!";
         resultColor = Color::BJ_BUST;
+        playSound(alertSound);
     } else if(totalWon > 0){
         playerBalance += totalWon;
         resultStr = "GEWONNEN! +" + std::to_string(totalWon) + "$";
         resultColor = Color::WIN_TEXT;
+        playSound(winSound);
     } else {
         resultStr = "VERLOREN!";
         resultColor = Color::BJ_BUST;
+        playSound(loseSound);
     }
 
     saveBalance();
@@ -1122,6 +1290,7 @@ void Game::evaluateRouletteSpin()
     textRouletteResult.setFillColor(resultColor);
     textRouletteWinningNumber.setString(std::to_string(winningNumber));
     textRouletteWinningNumber.setFillColor(getRouletteNumberColor(winningNumber));
+    // NOTE: Bets are NOT cleared here. They persist until the player starts the next round (presses SPACE).
     // NOTE: Bets are NOT cleared here. They persist until the player starts the next round (presses SPACE).
 }
 
@@ -1134,9 +1303,11 @@ std::string Game::randomSymbol() const
 void Game::startSpin()
 {
     if(playerBalance < currentBet){ slotResultMsg="NOT ENOUGH BALANCE!"; lastWin=0; return; }
+    playSound(spinSound);
     playerBalance -= currentBet;
     saveBalance();
     slotResultMsg.clear(); lastWin=0; isSpinning=true; winBlinking=false;
+    textSlotAutoStatus.setString("");
     spinElapsed=0.f; flickerAccum=0.f;
     reel1Stopped=reel2Stopped=reel3Stopped=false;
     slots[0]=randomSymbol(); slots[1]=randomSymbol(); slots[2]=randomSymbol();
@@ -1203,21 +1374,41 @@ void Game::finalizeSpin()
         slotResultMsg="YOU WIN!  +" + std::to_string(lastWin) + " $";
     else
         slotResultMsg="TRY AGAIN";
-    if(lastWin>0){ winBlinking=true; winBlinkTimer=0.f; winBlinkPhase=0.f; winBlinkVisible=true; }
+    if(lastWin>0){
+        winBlinking=true; winBlinkTimer=0.f; winBlinkPhase=0.f; winBlinkVisible=true;
+        playSound(winSound);
+    } else {
+        playSound(loseSound);
+    }
+    // Autospin behavior: if autospin is active, set wait timer equal to the win multiplier
+    if(slotAutoSpin){
+        lastSlotLastWin = lastWin;
+        float multiplierDelay = 0.5f;
+        if(currentBet > 0){
+            multiplierDelay = std::max(0.5f, static_cast<float>(lastWin) / static_cast<float>(currentBet));
+        }
+        slotAutoWaitTimer = multiplierDelay;
+        textSlotAutoStatus.setString("AUTOSPIN: " + formatAutoDelay(multiplierDelay) + "s");
+    }
 }
 
 int Game::calcSlotWin() const
 {
+    const int symbolIndex = slotSymbolIndex(slots[0]);
+    if(symbolIndex < 0){
+        return 0;
+    }
+
     if(slots[0]==slots[1] && slots[1]==slots[2]){
-        if(slots[0]=="[ 7 ]") return currentBet*10;
-        if(slots[0]=="[BAR]") return currentBet*4;
-        return currentBet*2;
+        return currentBet * SlotEconomy::triplePayouts[symbolIndex];
     }
     bool p01=(slots[0]==slots[1]), p12=(slots[1]==slots[2]), p02=(slots[0]==slots[2]);
     if(p01||p12||p02){
         const std::string& sym = p01?slots[0]:(p12?slots[1]:slots[0]);
-        if(sym=="[ 7 ]") return currentBet*3;
-        if(sym=="[BAR]") return currentBet*2;
+        const int pairIndex = slotSymbolIndex(sym);
+        if(pairIndex >= 0){
+            return currentBet * SlotEconomy::pairPayouts[pairIndex];
+        }
     }
     return 0;
 }
@@ -1246,6 +1437,19 @@ void Game::pollEvents()
     sf::Event event;
     while(window.pollEvent(event)){
         if(event.type==sf::Event::Closed){ window.close(); return; }
+
+        if(event.type==sf::Event::TextEntered && betInputActive){
+            // Bet input accepts numeric characters and backspace
+            const sf::Uint32 ch = event.text.unicode;
+            if(ch >= '0' && ch <= '9'){
+                if(betInputBuffer.size() < 12) betInputBuffer.push_back(static_cast<char>(ch));
+            } else if(ch == 8 && !betInputBuffer.empty()){
+                betInputBuffer.pop_back();
+            }
+            textBetInput.setString("$" + betInputBuffer);
+            centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+            continue;
+        }
 
         if(event.type==sf::Event::TextEntered && currentState==GameState::MENU){
             if(adminCheatInputActive){
@@ -1286,9 +1490,49 @@ void Game::pollEvents()
                 if(event.key.code == sf::Keyboard::Escape){
                     // ESC: cancel exit
                     exitConfirmationActive = false;
+                    playSound(clickSound);
                     continue;
                 }
                 // ESC dialog overrides other key handling
+                continue;
+            }
+
+            // If bet input overlay is active, handle its special keybindings (global for active overlay)
+            if(betInputActive){
+                if(event.key.code == sf::Keyboard::Escape){
+                    // cancel bet input
+                    betInputActive = false;
+                    betInputBuffer.clear();
+                    textBetInput.setString("$");
+                    centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    playSound(clickSound);
+                    continue;
+                }
+                if(event.key.code == sf::Keyboard::Enter || event.key.code == sf::Keyboard::Return){
+                    if(!betInputBuffer.empty()){
+                        long long val = std::stoll(betInputBuffer);
+                        if(val < 0) val = 0;
+                        if(val > playerBalance) val = playerBalance;
+                        // Apply to current game
+                        if(currentState == GameState::SLOTS){
+                            currentBet = static_cast<int>(std::max(10LL, val));
+                            if(currentBet > playerBalance) currentBet = playerBalance;
+                        } else if(currentState == GameState::BLACKJACK){
+                            blackjackBet = static_cast<int>(std::max(10LL, val));
+                            if(blackjackBet > playerBalance) blackjackBet = playerBalance;
+                        } else if(currentState == GameState::ROULETTE){
+                            rouletteChip = static_cast<int>(std::max(1LL, val));
+                            if(rouletteChip > playerBalance) rouletteChip = playerBalance;
+                        }
+                    }
+                    betInputActive = false;
+                    betInputBuffer.clear();
+                    textBetInput.setString("$");
+                    centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    playSound(clickSound);
+                    continue;
+                }
+                // swallow other keys while input is open
                 continue;
             }
 
@@ -1298,6 +1542,7 @@ void Game::pollEvents()
                     adminMoneyInput.clear();
                     textAdminInput.setString("$");
                     centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    playSound(clickSound);
                     continue;
                 }
                 if(event.key.code == sf::Keyboard::Enter || event.key.code == sf::Keyboard::Return){
@@ -1314,6 +1559,7 @@ void Game::pollEvents()
                     adminMoneyInput.clear();
                     textAdminInput.setString("$");
                     centerTextH(textAdminInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                    playSound(clickSound);
                     continue;
                 }
                 // While admin input is open, swallow all other key presses
@@ -1324,12 +1570,13 @@ void Game::pollEvents()
             switch(currentState){
 
             case GameState::MENU:
-                if     (event.key.code==sf::Keyboard::Num1)   currentState=GameState::BLACKJACK;
-                else if(event.key.code==sf::Keyboard::Num2)   currentState=GameState::ROULETTE;
-                else if(event.key.code==sf::Keyboard::Num3)   currentState=GameState::SLOTS;
+                if     (event.key.code==sf::Keyboard::Num1)   { currentState=GameState::BLACKJACK; playSound(clickSound); }
+                else if(event.key.code==sf::Keyboard::Num2)   { currentState=GameState::ROULETTE; playSound(clickSound); }
+                else if(event.key.code==sf::Keyboard::Num3)   { currentState=GameState::SLOTS; playSound(clickSound); }
                 else if(event.key.code==sf::Keyboard::Escape){
                     exitConfirmationActive = true;
                     exitConfirmationFromState = GameState::MENU;
+                    playSound(alertSound);
                 }
                 break;
 
@@ -1337,18 +1584,29 @@ void Game::pollEvents()
                 if(event.key.code==sf::Keyboard::Escape){
                     exitConfirmationActive = true;
                     exitConfirmationFromState = GameState::ROULETTE;
+                    playSound(alertSound);
                 }
                 else if(event.key.code==sf::Keyboard::Space && !rouletteSpinning){
                     spinRoulette();
                 }
                 else if(!rouletteSpinning){
                     // Adjust currently selected chip amount with Up/Down
-                    if(event.key.code==sf::Keyboard::Up){
+                    if(event.key.code==sf::Keyboard::B){
+                        // Open bet input overlay to type arbitrary chip value
+                        betInputActive = true;
+                        betInputBuffer.clear();
+                        textBetInput.setString("$");
+                        centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                        playSound(clickSound);
+                    }
+                    else if(event.key.code==sf::Keyboard::Up){
                         rouletteChip = std::min(rouletteChip + 10, (playerBalance/10)*10);
                         if(rouletteChip < 10) rouletteChip = 10;
+                        playSound(clickSound);
                     }
                     else if(event.key.code==sf::Keyboard::Down){
                         rouletteChip = std::max(rouletteChip - 10, 10);
+                        playSound(clickSound);
                     }
                 }
                 break;
@@ -1357,14 +1615,43 @@ void Game::pollEvents()
                 if(event.key.code==sf::Keyboard::Escape){
                     exitConfirmationActive = true;
                     exitConfirmationFromState = GameState::SLOTS;
+                    playSound(alertSound);
+                }
+                else if(event.key.code==sf::Keyboard::X){
+                    // Stop autospin immediately; the current spin (if any) keeps running normally.
+                    slotAutoSpin = false;
+                    slotAutoWaitTimer = 0.f;
+                    textSlotAutoStatus.setString("");
+                    playSound(clickSound);
                 }
                 else if(event.key.code==sf::Keyboard::Space && !isSpinning) startSpin();
                 else if(!isSpinning){
-                    if(event.key.code==sf::Keyboard::Up){
+                    if(event.key.code==sf::Keyboard::B){
+                        // Open bet input overlay to type arbitrary bet
+                        betInputActive = true;
+                        betInputBuffer.clear();
+                        textBetInput.setString("$");
+                        centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                        // stop slot autospin when user wants to edit bet
+                        slotAutoSpin = false;
+                        slotAutoWaitTimer = 0.f;
+                        textSlotAutoStatus.setString("");
+                        playSound(clickSound);
+                    }
+                    else if(event.key.code==sf::Keyboard::A){
+                        // Start autospin for slots: will spin repeatedly until stopped with X
+                        slotAutoSpin = true;
+                        textSlotAutoStatus.setString("AUTOSPIN STARTED");
+                        // If not currently spinning, start immediately
+                        if(!isSpinning) startSpin();
+                        playSound(clickSound);
+                    }
+                    else if(event.key.code==sf::Keyboard::Up){
                         currentBet=std::min(currentBet+10,(playerBalance/10)*10);
                         if(currentBet<10) currentBet=10;
+                        playSound(clickSound);
                     } else if(event.key.code==sf::Keyboard::Down)
-                        currentBet=std::max(currentBet-10,10);
+                        { currentBet=std::max(currentBet-10,10); playSound(clickSound); }
                 }
                 break;
 
@@ -1372,21 +1659,31 @@ void Game::pollEvents()
                 if(event.key.code==sf::Keyboard::Escape){
                     exitConfirmationActive = true;
                     exitConfirmationFromState = GameState::BLACKJACK;
+                    playSound(alertSound);
                 }
                 else if(event.key.code==sf::Keyboard::Space && !blackjackGameActive)
                     startBlackjackRound();
                 else if(!blackjackGameActive){
                     // Einsatz anpassen nur außerhalb einer Runde
-                    if(event.key.code==sf::Keyboard::Up){
+                    if(event.key.code==sf::Keyboard::B){
+                        // Open bet input overlay to type arbitrary blackjack bet
+                        betInputActive = true;
+                        betInputBuffer.clear();
+                        textBetInput.setString("$");
+                        centerTextH(textBetInput, Screen::WIDTH, Screen::HEIGHT / 2.f + 24.f);
+                        playSound(clickSound);
+                    }
+                    else if(event.key.code==sf::Keyboard::Up){
                         blackjackBet=std::min(blackjackBet+10,(playerBalance/10)*10);
                         if(blackjackBet<10) blackjackBet=10;
+                        playSound(clickSound);
                     } else if(event.key.code==sf::Keyboard::Down)
-                        blackjackBet=std::max(blackjackBet-10,10);
+                        { blackjackBet=std::max(blackjackBet-10,10); playSound(clickSound); }
                 }
                 else if(blackjackGameActive){
-                    if     (event.key.code==sf::Keyboard::H) playerHit();
-                    else if(event.key.code==sf::Keyboard::S) playerStand();
-                    else if(event.key.code==sf::Keyboard::D) playerDoubleDown();
+                    if     (event.key.code==sf::Keyboard::H) { playerHit(); playSound(clickSound); }
+                    else if(event.key.code==sf::Keyboard::S) { playerStand(); playSound(clickSound); }
+                    else if(event.key.code==sf::Keyboard::D) { playerDoubleDown(); playSound(clickSound); }
                 }
                 break;
             }
@@ -1397,6 +1694,7 @@ void Game::pollEvents()
             if(exitConfirmationActive){
                 if(exitConfirmYesButton.getGlobalBounds().contains(mpF)){
                     // User confirmed exit
+                    playSound(clickSound);
                     if(exitConfirmationFromState == GameState::MENU){
                         window.close();
                     } else {
@@ -1425,12 +1723,13 @@ void Game::pollEvents()
                 else if(exitConfirmNoButton.getGlobalBounds().contains(mpF)){
                     // User cancelled exit
                     exitConfirmationActive = false;
+                    playSound(clickSound);
                 }
             }
             else if(currentState==GameState::MENU && !adminCheatInputActive){
-                if     (cardBox1.getGlobalBounds().contains(mpF)) currentState=GameState::BLACKJACK;
-                else if(cardBox2.getGlobalBounds().contains(mpF)) currentState=GameState::ROULETTE;
-                else if(cardBox3.getGlobalBounds().contains(mpF)) currentState=GameState::SLOTS;
+                if     (cardBox1.getGlobalBounds().contains(mpF)) { currentState=GameState::BLACKJACK; playSound(clickSound); }
+                else if(cardBox2.getGlobalBounds().contains(mpF)) { currentState=GameState::ROULETTE; playSound(clickSound); }
+                else if(cardBox3.getGlobalBounds().contains(mpF)) { currentState=GameState::SLOTS; playSound(clickSound); }
             }
         }
 
@@ -1441,15 +1740,19 @@ void Game::pollEvents()
             // Add chip to special bets
             if(betRedButton.getGlobalBounds().contains(mpF)){
                 betAmountRed += rouletteChip;
+                playSound(clickSound);
             }
             else if(betBlackButton.getGlobalBounds().contains(mpF)){
                 betAmountBlack += rouletteChip;
+                playSound(clickSound);
             }
             else if(betEvenButton.getGlobalBounds().contains(mpF)){
                 betAmountEven += rouletteChip;
+                playSound(clickSound);
             }
             else if(betOddButton.getGlobalBounds().contains(mpF)){
                 betAmountOdd += rouletteChip;
+                playSound(clickSound);
             }
             else {
                 // Number cells: add chip to clicked number (supports multiple bets)
@@ -1457,6 +1760,7 @@ void Game::pollEvents()
                     if(rouletteGrid[i].getGlobalBounds().contains(mpF)){
                         rouletteNumberBets[i] += rouletteChip;
                         selectedRouletteNumber = i;
+                        playSound(clickSound);
                         break;
                     }
                 }
@@ -1470,18 +1774,22 @@ void Game::pollEvents()
             if(betRedButton.getGlobalBounds().contains(mpF)){
                 betAmountRed -= rouletteChip;
                 if(betAmountRed < 0) betAmountRed = 0;
+                playSound(clickSound);
             }
             else if(betBlackButton.getGlobalBounds().contains(mpF)){
                 betAmountBlack -= rouletteChip;
                 if(betAmountBlack < 0) betAmountBlack = 0;
+                playSound(clickSound);
             }
             else if(betEvenButton.getGlobalBounds().contains(mpF)){
                 betAmountEven -= rouletteChip;
                 if(betAmountEven < 0) betAmountEven = 0;
+                playSound(clickSound);
             }
             else if(betOddButton.getGlobalBounds().contains(mpF)){
                 betAmountOdd -= rouletteChip;
                 if(betAmountOdd < 0) betAmountOdd = 0;
+                playSound(clickSound);
             }
             else {
                 for(int i=0; i<37; ++i){
@@ -1489,6 +1797,7 @@ void Game::pollEvents()
                         rouletteNumberBets[i] -= rouletteChip;
                         if(rouletteNumberBets[i] < 0) rouletteNumberBets[i] = 0;
                         selectedRouletteNumber = i;
+                        playSound(clickSound);
                         break;
                     }
                 }
@@ -1555,7 +1864,34 @@ void Game::update(float dt)
                 textSlotResult.setPosition(Screen::WIDTH / 2.f, resultY);
             }
         }
+        if(slotAutoSpin && !isSpinning && slotAutoWaitTimer <= 0.f){
+            textSlotAutoStatus.setString("");
+        }
+        if(!textSlotAutoStatus.getString().isEmpty()){
+            textSlotAutoStatus.setCharacterSize(18);
+            textSlotAutoStatus.setFillColor(Color::MID_GRAY);
+            centerTextH(textSlotAutoStatus, Screen::WIDTH, 622.f);
+        }
         textSlotControls.setFillColor(isSpinning?sf::Color(70,70,90):Color::MID_GRAY);
+
+        // Slot autospin: if enabled, wait for the configured wait timer (set after previous win)
+        if(slotAutoSpin){
+            if(!isSpinning){
+                if(slotAutoWaitTimer > 0.f){
+                    slotAutoWaitTimer = std::max(0.f, slotAutoWaitTimer - dt);
+                    textSlotAutoStatus.setString(std::string("AUTOSPIN: ") + formatAutoDelay(slotAutoWaitTimer) + "s");
+                } else {
+                    // time to spin the next round — ensure bet exists and enough balance
+                    if(currentBet <= 0 || playerBalance < currentBet){
+                        slotAutoSpin = false;
+                        textSlotAutoStatus.setString("AUTOSPIN STOPPED (no bets or low balance)");
+                    } else {
+                        textSlotAutoStatus.setString("");
+                        startSpin();
+                    }
+                }
+            }
+        }
     }
 
     // ── Blackjack ────────────────────────────────
@@ -1634,6 +1970,8 @@ void Game::update(float dt)
         } else {
             textRouletteControls.setFillColor(Color::MID_GRAY);
         }
+
+
     }
 }
 
@@ -1649,6 +1987,14 @@ void Game::render()
     case GameState::ROULETTE:  renderRoulette();  break;
     default:                   renderGame();      break;
     }
+    // Draw bet input overlay on top of everything when active
+    if(betInputActive){
+        window.draw(betOverlayBg);
+        window.draw(betInputBox);
+        window.draw(textBetPrompt);
+        window.draw(textBetInput);
+    }
+
     window.display();
 }
 
@@ -1721,6 +2067,7 @@ void Game::renderSlots()
     window.draw(slotPayline);
     window.draw(slotBetBox); window.draw(textSlotBet);
     if(!slotResultMsg.empty() && !isSpinning) window.draw(textSlotResult);
+    if(!textSlotAutoStatus.getString().isEmpty()) window.draw(textSlotAutoStatus);
     window.draw(textSlotControls);
 
     // Draw exit confirmation dialog if active

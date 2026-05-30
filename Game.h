@@ -1,5 +1,6 @@
 #pragma once
 #include <SFML/Graphics.hpp>
+#include <SFML/Audio.hpp>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@ private:
     void recreateWindow(bool fullscreen);
     void initFonts();
     void initAssets();
+    void initSounds();
     void initTexts();
     void initShapes();
 
@@ -48,6 +50,7 @@ private:
     void renderRoulette();
 
     void applyHoverStyle(sf::RectangleShape& box, bool hovered);
+    void playSound(sf::Sound& sound);
 
     // ── Slot-Logik ─────────────────────────────
     void        startSpin();
@@ -87,6 +90,18 @@ private:
     // ── Font ───────────────────────────────────
     sf::Font font;
 
+    // ── Audio ───────────────────────────────────
+    sf::SoundBuffer soundClickBuffer;
+    sf::SoundBuffer soundSpinBuffer;
+    sf::SoundBuffer soundWinBuffer;
+    sf::SoundBuffer soundLoseBuffer;
+    sf::SoundBuffer soundAlertBuffer;
+    sf::Sound clickSound;
+    sf::Sound spinSound;
+    sf::Sound winSound;
+    sf::Sound loseSound;
+    sf::Sound alertSound;
+
     // ── Menu texts ─────────────────────────────
     sf::Text textTitle;
     sf::Text textSubtitle;
@@ -107,6 +122,14 @@ private:
     std::string adminCheatBuffer;
     std::string adminMoneyInput;
     bool adminCheatInputActive{false};
+
+    // Bet input overlay (used to enter arbitrary bets via keyboard)
+    bool betInputActive{false};
+    std::string betInputBuffer;
+    sf::RectangleShape betOverlayBg;
+    sf::RectangleShape betInputBox;
+    sf::Text textBetPrompt;
+    sf::Text textBetInput;
 
     // ── Exit Confirmation Dialog ────────────────
     bool exitConfirmationActive{false};
@@ -165,7 +188,12 @@ private:
     sf::Text           textSlotReel[3];
     sf::Text           textSlotBet;
     sf::Text           textSlotResult;
+    sf::Text           textSlotAutoStatus;
     sf::Text           textSlotControls;
+    // Slot autospin support
+    bool  slotAutoSpin    { false };
+    int   lastSlotLastWin { 0 };
+    float slotAutoWaitTimer { 0.f };
 
     // ══════════════════════════════════════════
     //   BLACKJACK

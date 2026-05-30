@@ -11,8 +11,8 @@ FetchContent_Declare(
     GIT_TAG        2.6.1
 )
 
-# Hier schalten wir Audio und andere unnötige Dinge ab, um dem Fehler zu entkommen
-set(SFML_BUILD_AUDIO OFF CACHE INTERNAL "")
+# Audio wird gebraucht, damit die neuen Spiel-Sounds laufen
+set(SFML_BUILD_AUDIO ON CACHE INTERNAL "")
 set(SFML_BUILD_EXAMPLES OFF CACHE INTERNAL "")
 set(SFML_BUILD_DOC OFF CACHE INTERNAL "")
 
@@ -21,16 +21,25 @@ FetchContent_MakeAvailable(SFML)
 # Unsere ausführbare Datei
 add_executable(ByteVegas main.cpp Game.cpp Game.h)
 
-# Wir linken nur die funktionierenden Grafik-, Fenster- und System-Module
-target_link_libraries(ByteVegas PRIVATE sfml-graphics sfml-window sfml-system)
+# Wir linken Grafik-, Fenster-, System- und Audio-Module
+target_link_libraries(ByteVegas PRIVATE sfml-graphics sfml-window sfml-system sfml-audio)
 
-# DLLs kopieren (ohne Audio)
+# DLLs kopieren
 if(WIN32)
+    set(BYTEVEGAS_RUNTIME_DLLS
+        ${sfml_BINARY_DIR}/lib/sfml-graphics-d-2.dll
+        ${sfml_BINARY_DIR}/lib/sfml-window-d-2.dll
+        ${sfml_BINARY_DIR}/lib/sfml-system-d-2.dll
+        ${sfml_BINARY_DIR}/lib/sfml-audio-d-2.dll
+    )
+
+    if(EXISTS "${sfml_SOURCE_DIR}/extlibs/bin/x64/openal32.dll")
+        list(APPEND BYTEVEGAS_RUNTIME_DLLS "${sfml_SOURCE_DIR}/extlibs/bin/x64/openal32.dll")
+    elseif(EXISTS "${sfml_BINARY_DIR}/extlibs/bin/x64/openal32.dll")
+        list(APPEND BYTEVEGAS_RUNTIME_DLLS "${sfml_BINARY_DIR}/extlibs/bin/x64/openal32.dll")
+    endif()
+
     add_custom_command(TARGET ByteVegas POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:sfml-graphics>
-        $<TARGET_FILE:sfml-window>
-        $<TARGET_FILE:sfml-system>
-        $<TARGET_FILE_DIR:ByteVegas>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${BYTEVEGAS_RUNTIME_DLLS} $<TARGET_FILE_DIR:ByteVegas>
     )
 endif()
